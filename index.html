@@ -1,0 +1,408 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Perkenalan Adly AI</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 24px 15px;
+  min-height: 100vh;
+  font-family: Arial, sans-serif;
+  text-align: center;
+  color: white;
+  background: linear-gradient(135deg, #080b24, #173d70, #511b70);
+}
+
+h1 {
+  color: #71faff;
+  font-size: 36px;
+  letter-spacing: 4px;
+  text-shadow: 0 0 18px #00cfff;
+}
+
+.subtitle {
+  color: #d9e7ff;
+}
+
+.camera {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  margin: 20px auto;
+  border: 3px solid #71faff;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #080b18;
+  aspect-ratio: 3 / 4;
+}
+
+video, canvas {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+#placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  padding: 20px;
+  line-height: 1.8;
+  color: #a9d9ff;
+}
+
+.panel {
+  max-width: 420px;
+  margin: 18px auto;
+  padding: 20px;
+  background: #ffffff12;
+  border: 1px solid #5878c5;
+  border-radius: 20px;
+}
+
+#greeting {
+  font-size: 22px;
+  font-weight: bold;
+  color: #71faff;
+  line-height: 1.6;
+}
+
+#status {
+  font-size: 14px;
+  color: #ffe68b;
+  line-height: 1.6;
+}
+
+button {
+  padding: 13px 18px;
+  margin: 5px;
+  border: none;
+  border-radius: 25px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.start {
+  background: #71faff;
+  color: #10152d;
+}
+
+.stop {
+  background: #ed547a;
+  color: white;
+}
+
+.intro {
+  background: #8065ed;
+  color: white;
+}
+
+.voice {
+  background: #18b879;
+  color: white;
+}
+
+.info {
+  max-width: 420px;
+  margin: 20px auto;
+  color: #d4dcff;
+  font-size: 13px;
+  line-height: 1.8;
+}
+</style>
+</head>
+
+<body>
+
+<h1>HELLO, ADLY!</h1>
+<p class="subtitle">✨ Perkenalan Interaktif AI ✨</p>
+
+<div class="camera">
+  <div id="placeholder">
+    📷<br>
+    Kamera Adly<br>
+    Tekan tombol mulai!
+  </div>
+
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="panel">
+  <div id="greeting">Halo semuanya! 👋</div>
+  <p id="status">Namaku Adly. Ayo mulai perkenalan!</p>
+
+  <button class="start" id="start">📷 MULAI KAMERA</button>
+  <button class="stop" id="stop">⏹ MATIKAN</button>
+  <br>
+  <button class="intro" id="intro">🗣️ PERKENALKAN DIRI</button>
+  <button class="voice" id="testVoice">🔊 TES SUARA</button>
+</div>
+
+<div class="info">
+  🖐️ Telapak terbuka: Halo semuanya!<br>
+  ✌️ Dua jari: Perkenalkan, nama saya Adly!<br>
+  👍 Jempol: Senang berkenalan dengan kalian!<br>
+  🔊 Semua salam dapat diucapkan dengan suara.
+</div>
+
+<script type="module">
+import {
+  FilesetResolver,
+  HandLandmarker,
+  DrawingUtils
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm";
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const greeting = document.getElementById("greeting");
+const status = document.getElementById("status");
+const placeholder = document.getElementById("placeholder");
+
+let stream = null;
+let detector = null;
+let active = false;
+let previousTime = -1;
+let previousGesture = "";
+let lastChange = 0;
+let lastSpoken = 0;
+
+function speak(text) {
+  if (!("speechSynthesis" in window)) {
+    status.textContent = "Browser ini tidak mendukung suara.";
+    return;
+  }
+
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "id-ID";
+  utterance.rate = 0.9;
+  utterance.pitch = 1.05;
+  utterance.volume = 1;
+
+  window.speechSynthesis.speak(utterance);
+}
+
+async function loadDetector() {
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+  );
+
+  detector = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO",
+    numHands: 1
+  });
+}
+
+function classify(hand) {
+  const index = hand[8].y < hand[6].y;
+  const middle = hand[12].y < hand[10].y;
+  const ring = hand[16].y < hand[14].y;
+  const pinky = hand[20].y < hand[18].y;
+
+  const extended = [index, middle, ring, pinky]
+    .filter(Boolean).length;
+
+  const thumb =
+    Math.hypot(
+      hand[4].x - hand[2].x,
+      hand[4].y - hand[2].y
+    ) >
+    Math.hypot(
+      hand[3].x - hand[2].x,
+      hand[3].y - hand[2].y
+    ) * 1.2;
+
+  if (index && middle && !ring && !pinky) return "peace";
+  if (thumb && extended === 0) return "thumb";
+  if (extended >= 4) return "open";
+
+  return "none";
+}
+
+function updateGesture(gesture) {
+  const messages = {
+    open: [
+      "Halo semuanya! 👋",
+      "Halo semuanya! Apa kabar?"
+    ],
+    peace: [
+      "Perkenalkan, nama saya Adly! ✌️",
+      "Halo, perkenalkan nama saya Adly. Senang berkenalan dengan kalian!"
+    ],
+    thumb: [
+      "Senang berkenalan dengan kalian! 👍",
+      "Senang sekali bisa berkenalan dengan kalian. Terima kasih!"
+    ],
+    none: [
+      "Ayo tunjukkan gestur tangan!",
+      "Silakan tunjukkan gestur tangan di depan kamera."
+    ]
+  };
+
+  greeting.textContent = messages[gesture][0];
+  status.textContent = messages[gesture][1];
+
+  const now = Date.now();
+
+  // Suara hanya saat gestur berubah, dengan jeda antarsalam.
+  if (gesture !== "none" && now - lastSpoken > 2500) {
+    speak(messages[gesture][1]);
+    lastSpoken = now;
+  }
+}
+
+function frame() {
+  if (!active) return;
+
+  if (video.readyState >= 2 &&
+      video.currentTime !== previousTime) {
+    previousTime = video.currentTime;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const result = detector.detectForVideo(
+      video,
+      performance.now()
+    );
+
+    const drawing = new DrawingUtils(ctx);
+    let gesture = "none";
+
+    if (result.landmarks.length) {
+      result.landmarks.forEach(hand => {
+        drawing.drawConnectors(
+          hand,
+          HandLandmarker.HAND_CONNECTIONS,
+          { color: "#00F5FF", lineWidth: 4 }
+        );
+
+        drawing.drawLandmarks(hand, {
+          color: "#FFFFFF",
+          fillColor: "#8B5CF6",
+          radius: 4
+        });
+      });
+
+      gesture = classify(result.landmarks[0]);
+    }
+
+    if (gesture !== previousGesture &&
+        Date.now() - lastChange > 400) {
+      previousGesture = gesture;
+      lastChange = Date.now();
+
+      if (gesture !== "none") {
+        updateGesture(gesture);
+      } else {
+        status.textContent = "Tunjukkan gestur tanganmu!";
+      }
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+document.getElementById("start").onclick = async () => {
+  try {
+    status.textContent = "Meminta izin kamera...";
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Kamera memerlukan HTTPS atau localhost.");
+    }
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" },
+      audio: false
+    });
+
+    video.srcObject = stream;
+    await video.play();
+
+    placeholder.style.display = "none";
+    status.textContent = "Memuat pendeteksi gestur...";
+
+    if (!detector) {
+      await loadDetector();
+    }
+
+    active = true;
+    previousTime = -1;
+    previousGesture = "";
+    status.textContent = "Kamera aktif! Tunjukkan tanganmu.";
+    requestAnimationFrame(frame);
+
+  } catch (error) {
+    console.error(error);
+
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      stream = null;
+    }
+
+    video.srcObject = null;
+    placeholder.style.display = "grid";
+
+    status.textContent =
+      "Gagal membuka kamera atau AI. Izinkan kamera dan periksa internet.";
+  }
+};
+
+document.getElementById("stop").onclick = () => {
+  active = false;
+
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+
+  video.srcObject = null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  placeholder.style.display = "grid";
+
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+
+  greeting.textContent = "Sampai jumpa! 👋";
+  status.textContent = "Kamera sudah dimatikan.";
+};
+
+document.getElementById("intro").onclick = () => {
+  const text =
+    "Halo semuanya! Perkenalkan, nama saya Adly. Saya senang berkenalan dengan kalian. Semoga kita semua selalu sehat dan sukses. Terima kasih!";
+
+  greeting.textContent = "Halo, saya Adly! ✨";
+  status.textContent = "Adly sedang memperkenalkan diri.";
+  speak(text);
+};
+
+document.getElementById("testVoice").onclick = () => {
+  speak("Halo! Ini suara perkenalan Adly. Senang berkenalan dengan kalian!");
+};
+</script>
+
+</body>
+</html>
